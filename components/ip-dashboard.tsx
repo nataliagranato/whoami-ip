@@ -25,12 +25,12 @@ export function IpDashboard() {
   const [loading, setLoading] = useState(true)
   const [speed, setSpeed] = useState('Medindo...')
   const [copied, setCopied] = useState<'ip' | 'curl' | null>(null)
-  const curlCommand = 'curl whoami.moe'
+  const curlCommand = 'curl whoami.nataliagranato.xyz'
 
   async function measureSpeed() {
     try { const started = performance.now(); const response = await fetch(`https://speed.cloudflare.com/__down?bytes=5000000&cacheBust=${Date.now()}`, { cache: 'no-store' }); await response.arrayBuffer(); setSpeed(`${((5 * 8) / ((performance.now() - started) / 1000)).toFixed(1)} Mbps`) } catch { setSpeed('Indisponível') }
   }
-  async function loadIp() { setLoading(true); await Promise.all([fetch('/api/ip', { cache: 'no-store' }).then((r) => r.json()).then(setData), measureSpeed()]); setLoading(false) }
+  async function loadIp() { setLoading(true); await Promise.all([fetch('/api/ip', { cache: 'no-store', headers: { 'x-client-user-agent': navigator.userAgent } }).then((r) => r.json()).then(setData), measureSpeed()]); setLoading(false) }
   useEffect(() => { loadIp() }, [])
   async function copy(value: string, type: 'ip' | 'curl') { await navigator.clipboard.writeText(value); setCopied(type); window.setTimeout(() => setCopied(null), 1800) }
   const hasCoordinates = data && data.latitude !== 'N/A' && data.longitude !== 'N/A'
