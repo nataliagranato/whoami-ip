@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+export const dynamic = 'force-dynamic'
+
+const UNKNOWN = 'Indisponível'
+
 function isIPv4(value: string) {
   return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)
 }
@@ -8,30 +12,58 @@ function isIPv6(value: string) {
   return value.includes(':')
 }
 
+async function getJson(url: string) {
+  try {
+    const response = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } })
+    return response.ok ? await response.json() : null
+  } catch {
+    return null
+  }
+}
+
+async function getLocation(ip: string | null) {
+  const suffix = ip ? `/${ip}` : ''
+  const providers = [`https://ipwho.is${suffix}`, `https://ipapi.co${suffix}/json/`]
+  for (const provider of providers) {
+    const result = await getJson(provider)
+    if (result && (result.success !== false) && (result.city || result.country || result.latitude)) return result
+  }
+  return null
+}
+
 export async function GET(request: NextRequest) {
   const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0].trim()
-  const detectedIp = forwarded || request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || 'Indisponível'
+  const detectedIp = forwarded || request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || UNKNOWN
   const hostname = request.headers.get('host') || new URL(request.url).hostname
-  let ipv4 = isIPv4(detectedIp) ? detectedIp : 'Indisponível'
-  let ipv6 = isIPv6(detectedIp) ? detectedIp : 'Indisponível'
+  const locationIp = isIPv4(detectedIp) || isIPv6(detectedIp) ? detectedIp : null
 
-  const location = { city: 'Desconhecida', region: 'Desconhecida', country: 'Desconhecido', latitude: 'N/A', longitude: 'N/A', timezone: 'N/A', isp: 'Desconhecido' }
+  const [location, publicIpv4, publicIpv6] = await Promise.all([
+    getLocation(locationIp),
+    getJson('https://api.ipify.org?format=json'),
+    getJson('https://api6.ipify.org?format=json'),
+  ])
 
-  try {
-    const [locationRes, ipv4Res, ipv6Res] = await Promise.all([
-      detectedIp !== 'Indisponível' ? fetch(`https://ipapi.co/${detectedIp}/json/`, { next: { revalidate: 3600 } }) : Promise.resolve(null),
-      fetch('https://api.ipify.org?format=json', { next: { revalidate: 300 } }),
-      fetch('https://api6.ipify.org?format=json', { next: { revalidate: 300 } }),
-    ])
-    if (locationRes?.ok) {
-      const value = await locationRes.json()
-      Object.assign(location, { city: value.city || location.city, region: value.region || location.region, country: value.country_name || location.country, latitude: value.latitude?.toString() || location.latitude, longitude: value.longitude?.toString() || location.longitude, timezone: value.timezone || location.timezone, isp: value.org || location.isp })
-    }
-    if (ipv4Res.ok) ipv4 = (await ipv4Res.json()).ip || ipv4
-    if (ipv6Res.ok) ipv6 = (await ipv6Res.json()).ip || ipv6
-  } catch {
-    // Mantém os valores disponíveis quando um serviço externo não responde.
-  }
+  const ipv4 = publicIpv4?.ip || (isIPv4(detectedIp) ? detectedIp : UNKNOWN)
+  const ipv6 = publicIpv6?.ip || (isIPv6(detectedIp) ? detectedIp : UNKNOWN)
+  const ip = ipv4 !== UNKNOWN ? ipv4 : (locationIp || UNKNOWN)
 
-  return NextResponse.json({ ip: detectedIp, ipv4, ipv6, hostname, userAgent: request.headers.get('user-agent') || 'Indisponível', ...location, timestamp: new Date().toISOString() })
+  const timezone = typeof location?.timezone === 'object' ? location.timezone?.id : location?.timezone
+  const country = location?.country_name || location?.country || UNKNOWN
+  const isp = location?.connection?.isp || location?.org || location?.asn || UNKNOWN
+
+  return NextResponse.json({
+    ip,
+    ipv4,
+    ipv6,
+    hostname,
+    userAgent: request.headers.get('x-client-user-agent') || request.headers.get('user-agent') || UNKNOWN,
+    city: location?.city || UNKNOWN,
+    region: location?.region || UNKNOWN,
+    country,
+    latitude: location?.latitude?.toString() || 'N/A',
+    longitude: location?.longitude?.toString() || 'N/A',
+    timezone: timezone || UNKNOWN,
+    isp,
+    timestamp: new Date().toISOString(),
+  })
 }
